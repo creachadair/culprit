@@ -20,6 +20,7 @@ import (
 var (
 	goodVal  = flag.Int("good", 0, "Value known to be good (0 to bracket)")
 	badVal   = flag.Int("bad", 0, "Value known to be bad (0 to bracket)")
+	doBrack  = flag.Bool("bracket", false, "Enable bracketing")
 	doEcho   = flag.Bool("echo", false, "Echo probe command output to stderr")
 	doLog    = flag.Bool("log", false, "Log probe commands as executed to stderr")
 	doVerify = flag.Bool("verify", true, "Verify the starting points as assigned")
@@ -43,8 +44,8 @@ value.  If the script succeeds, the probe is considered GOOD; otherwise BAD.
 Search continues until adjacent values are found that bracket the GOOD/BAD
 divide.
 
-If either of -good or -bad is positive while the other is 0, the tool will
-probe for a bracketing value above the positive value.
+If -bracket is true and either -good or -bad is positive while the other is 0,
+the tool will probe for a bracketing value above the positive value.
 
 If -env is set, an environment variable with that name is populated with the
 current probe value when executing the probe script.
@@ -98,7 +99,7 @@ func main() {
 	start := time.Now()
 
 	// Bracketing: If lo == 0, search for a bracketing value above hi.
-	if lo == 0 {
+	if *doBrack && lo == 0 {
 		// Swap endpoints; hi is now the baseline.
 		lo, loOK, hi, hiOK = hi, hiOK, lo, loOK
 
