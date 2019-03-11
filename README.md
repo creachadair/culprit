@@ -17,10 +17,10 @@ $ culprit -good 1 -bad 50 '(($PROBE < 33))'
 Here is a more interesting example, automatically bisecting a Git repo:
 
 ```shell
-$ culprit -good 0 -bad 100 'git checkout master
-git branch -D culprit 2>/dev/null
-git checkout -b culprit HEAD~$PROBE
-env GO111MODULE=off git go test'
+$ git checkout -b testing
+$ culprit -good 0 -bad 100 '
+git reset --hard master~$PROBE
+go test -race -cpu=1,2 ./...'
 ```
 
 Typical output looks like this:
