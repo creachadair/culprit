@@ -31,8 +31,6 @@ var (
 	cmdOutput = ioutil.Discard
 )
 
-const workspace = "google3"
-
 func init() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: %[1]s [options] <script>...
