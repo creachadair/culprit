@@ -35,15 +35,18 @@ func init() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: %[1]s [options] <script>...
 
-Given a pair of integer values (typically changelist numbers) that bracket a
-change in status from working (GOOD) to non-working (BAD) or vice versa, this
-tool does a binary search by invoking the specified script for each probe
-value.  If the script succeeds, the probe is considered GOOD; otherwise BAD.
-Search continues until adjacent values are found that bracket the GOOD/BAD
-divide.
+Given a pair of integer values representing points in a sequence of states
+between which a change in status occurs from working (GOOD) to non-working
+(BAD) or vice versa, this tool performs a binary search by invoking the
+specified script for each probe value.  If the script succeeds, the probe is
+considered GOOD; otherwise BAD.  Search continues until adjacent values are
+found that bracket the GOOD/BAD divide.
 
-If -bracket is true and either -good or -bad is positive while the other is 0,
-the tool will probe for a bracketing value above the positive value.
+At least one of -good and -bad must be positive. By default, %[1]s probes
+between the two values.
+
+However, if -bracket is true and one of the values is 0, the tool will probe
+for a bracketing value above the other (positive) value.
 
 If -env is set, an environment variable with that name is populated with the
 current probe value when executing the probe script.
