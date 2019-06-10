@@ -1,3 +1,3 @@
-module bitbucket.org/creachadair/culprit
+module github.com/creachadair/culprit
 
 go 1.12
