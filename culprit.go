@@ -101,8 +101,8 @@ func main() {
 
 	// Bracketing: If lo == 0, search for a bracketing value above hi.
 	if *doBrack && lo == 0 {
-		// Swap endpoints; hi is now the baseline.
-		lo, loOK, hi, hiOK = hi, hiOK, lo, loOK
+		// Use hi as the baseline.
+		lo, loOK = hi, hiOK
 
 		diag("Searching for a bracketing value above %d [%v]...", lo, loOK)
 		delta := clog2(lo)
