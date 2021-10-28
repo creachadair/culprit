@@ -7,7 +7,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -28,7 +28,7 @@ var (
 	clMarker = flag.String("env", "PROBE", "Variable with probe value in script environment")
 	inShell  = flag.String("shell", "/bin/sh", "Shell to use for running scripts")
 
-	cmdOutput = ioutil.Discard
+	cmdOutput = io.Discard
 )
 
 func init() {
