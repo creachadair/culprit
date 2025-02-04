@@ -27,6 +27,7 @@ var (
 	doChdir  = flag.String("cd", "", `Change to this directory before each probe (with $PROBE)`)
 	clMarker = flag.String("env", "PROBE", "Variable with probe value in script environment")
 	inShell  = flag.String("shell", "/bin/sh", "Shell to use for running scripts")
+	maxBrack = flag.Int("bmax", 0, "Maximum bracketing value")
 
 	cmdOutput = io.Discard
 )
@@ -111,6 +112,8 @@ func main() {
 			next := lo + delta
 			if next <= 0 { // overflow
 				log.Fatalf("No bracketing value found above lo=%d [%s]", lo, loOK)
+			} else if *maxBrack > 0 && next > *maxBrack {
+				log.Fatalf("No bracketing value found between lo=%d [%s] and %d", lo, loOK, *maxBrack)
 			}
 			np++
 
