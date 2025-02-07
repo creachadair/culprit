@@ -152,7 +152,7 @@ func main() {
 	} else {
 		fmt.Println("No culprit found")
 	}
-	diag("%d probes; total time elapsed: %v", np, time.Since(start))
+	diag("%d probes; total time elapsed: %v", np, time.Since(start).Round(time.Millisecond))
 }
 
 func diag(msg string, args ...interface{}) { fmt.Fprintf(os.Stderr, msg+"\n", args...) }
@@ -210,7 +210,7 @@ func logCommand(tag, cmd string, args []string) {
 func runTrial(cl int, args []string) (out status) {
 	start := time.Now()
 	defer func() {
-		diag(" %c %d is %v\t[%v elapsed]", out.Mark(), cl, out, time.Since(start))
+		diag(" %c %d is %v\t[%v elapsed]", out.Mark(), cl, out, time.Since(start).Round(time.Millisecond))
 	}()
 
 	if err := prepCommand(args, cl).Run(); err != nil {
