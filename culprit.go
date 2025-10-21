@@ -32,21 +32,16 @@ var flags struct {
 	ProbeList  string `flag:"probelist,File containing probe values, one per line"`
 }
 
-var (
-	cmdOutput = io.Discard
-	probeText []string
-)
-
 func main() {
 	root := &command.C{
 		Name:  command.ProgramName(),
 		Usage: "[flags] <script>...",
 		Help: `Perform bisection search for a cause of error.
 
-Given a pair of integer values representing points in a sequence of states
-between which a change in status occurs from working (GOOD) to non-working
-(BAD) or vice versa, this tool performs a binary search by invoking the
-specified script for each probe value.  If the script succeeds, the probe is
+Given a pair of positive integer values representing points in a sequence of
+states between which a change in status occurs from working (GOOD) to
+non-working (BAD) or vice versa, this tool performs a binary search by invoking
+the specified script for each probe value.  If the script succeeds, the probe is
 considered GOOD; otherwise BAD.  Search continues until adjacent values are
 found that bracket the GOOD/BAD divide.
 
@@ -61,7 +56,7 @@ current probe value when executing the probe script.
 
 If --probelist is set, its contents are used as the probe values rather than
 the current index. Each line is one probe value. If only one endpoint is set,
-this implicitly sets --bracket also.
+this implicitly sets --bracket also. Lines are addressed from 1.
 
 If --cd is set, the probe script is run with its current working directory set
 to the specified value. The variable $PROBE is replaced with the current probe
@@ -80,17 +75,15 @@ func runMain(env *command.Env, script []string) error {
 	if len(script) == 0 {
 		return env.Usagef("you must provide a script to execute")
 	}
-	if flags.Echo {
-		cmdOutput = os.Stderr
-	}
 	if flags.ProbeList != "" {
 		data, err := os.ReadFile(flags.ProbeList)
 		if err != nil {
 			return fmt.Errorf("reading probe list: %w", err)
 		}
-		probeText = mstr.Lines(string(data))
-		flags.MaxBracket = len(probeText)
-		diag(env, "Loaded %d probe strings from %q", len(probeText), flags.ProbeList)
+		lines := mstr.Lines(string(data))
+		env.Config = lines
+		flags.MaxBracket = len(lines)
+		diag(env, "Loaded %d probe strings from %q", len(lines), flags.ProbeList)
 	}
 
 	// Establish the endpoints of the search. These may be modified by
@@ -108,7 +101,7 @@ func runMain(env *command.Env, script []string) error {
 
 	// If there is a probe list file, and the caller only specified one
 	// endpoint, implicitly enable bracketing.
-	if probeText != nil && lo == 0 {
+	if env.Config != nil && lo == 0 {
 		flags.Bracket = true
 	}
 	if flags.Verify {
@@ -222,8 +215,10 @@ func prepCommand(env *command.Env, args []string, probe string) *exec.Cmd {
 	logCommand(env, "SCRIPT", script, nil)
 	cmd := exec.Command(flags.UseShell)
 	cmd.Stdin = strings.NewReader(script)
-	cmd.Stdout = cmdOutput
-	cmd.Stderr = cmdOutput
+	if flags.Echo {
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+	}
 	if flags.Marker != "" {
 		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", flags.Marker, probe))
 	}
@@ -253,7 +248,7 @@ func runTrial(env *command.Env, cl int, args []string) (out status, err error) {
 		}
 	}()
 	probe := strconv.Itoa(cl)
-	if probeText != nil {
+	if probeText, ok := env.Config.([]string); ok {
 		if cl <= 0 || cl > len(probeText) {
 			return out, fmt.Errorf("invalid probe index %d: no corresponding value", cl)
 		}
