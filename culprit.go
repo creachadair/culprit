@@ -5,40 +5,43 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/creachadair/command"
+	"github.com/creachadair/flax"
 	"github.com/creachadair/mds/mstr"
 )
 
-var (
-	goodVal   = flag.Int("good", 0, "Value known to be good (0 to bracket)")
-	badVal    = flag.Int("bad", 0, "Value known to be bad (0 to bracket)")
-	doBrack   = flag.Bool("bracket", false, "Enable bracketing")
-	doEcho    = flag.Bool("echo", false, "Echo probe command output to stderr")
-	doLog     = flag.Bool("log", false, "Log probe commands as executed to stderr")
-	doVerify  = flag.Bool("verify", true, "Verify the starting points as assigned")
-	doChdir   = flag.String("cd", "", `Change to this directory before each probe (with $PROBE)`)
-	clMarker  = flag.String("env", "PROBE", "Variable with probe value in script environment")
-	inShell   = flag.String("shell", "/bin/sh", "Shell to use for running scripts")
-	maxBrack  = flag.Int("bmax", 0, "Maximum bracketing value")
-	probeList = flag.String("probelist", "", "File containing probe values, one per line")
+var flags struct {
+	Good       int    `flag:"good,Value known to be good (0 to bracket)"`
+	Bad        int    `flag:"bad,Value known to be bad (0 to bracket)"`
+	Bracket    bool   `flag:"bracket,Enable bracketing"`
+	Echo       bool   `flag:"echo,Echo probe command output to stderr"`
+	Log        bool   `flag:"log,Log probe commands as executed to stderr"`
+	Verify     bool   `flag:"verify,default=true,Verify the starting points as assigned"`
+	Chdir      string `flag:"cd,Change to this directory before each probe (with $PROBE)"`
+	Marker     string `flag:"env,default=PROBE,Variable with probe value in script environment"`
+	UseShell   string `flag:"shell,default=/bin/sh,Shell to use for running scripts"`
+	MaxBracket int    `flag:"bmax,Maximum bracketing value"`
+	ProbeList  string `flag:"probelist,File containing probe values, one per line"`
+}
 
+var (
 	cmdOutput = io.Discard
 	probeText []string
 )
 
-func init() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `Usage: %[1]s [options] <script>...
+func main() {
+	root := &command.C{
+		Name:  command.ProgramName(),
+		Usage: "[flags] <script>...",
+		Help: `Perform bisection search for a cause of error.
 
 Given a pair of integer values representing points in a sequence of states
 between which a change in status occurs from working (GOOD) to non-working
@@ -47,7 +50,7 @@ specified script for each probe value.  If the script succeeds, the probe is
 considered GOOD; otherwise BAD.  Search continues until adjacent values are
 found that bracket the GOOD/BAD divide.
 
-At least one of --good and --bad must be positive. By default, %[1]s probes
+At least one of --good and --bad must be positive. By default, it probes
 between the two values.
 
 However, if --bracket is true and one of the values is 0, the tool will probe
@@ -62,60 +65,66 @@ this implicitly sets --bracket also.
 
 If --cd is set, the probe script is run with its current working directory set
 to the specified value. The variable $PROBE is replaced with the current probe
-value in the directory path.
-
-Options:
-`, filepath.Base(os.Args[0]))
-		flag.PrintDefaults()
+value in the directory path.`,
+		SetFlags: command.Flags(flax.MustBind, &flags),
+		Run:      command.Adapt(runMain),
+		Commands: []*command.C{
+			command.HelpCommand(nil),
+			command.VersionCommand(),
+		},
 	}
+	command.RunOrFail(root.NewEnv(nil), os.Args[1:])
 }
 
-func main() {
-	flag.Parse()
-	if flag.NArg() == 0 {
-		log.Fatal("You must provide a script to execute")
+func runMain(env *command.Env, script []string) error {
+	if len(script) == 0 {
+		return env.Usagef("you must provide a script to execute")
 	}
-	if *doEcho {
+	if flags.Echo {
 		cmdOutput = os.Stderr
 	}
-	if *probeList != "" {
-		data, err := os.ReadFile(*probeList)
+	if flags.ProbeList != "" {
+		data, err := os.ReadFile(flags.ProbeList)
 		if err != nil {
-			log.Fatalf("Reading probe list: %v", err)
+			return fmt.Errorf("reading probe list: %w", err)
 		}
 		probeText = mstr.Lines(string(data))
-		*maxBrack = len(probeText)
-		diag("Loaded %d probe strings from %q", len(probeText), *probeList)
+		flags.MaxBracket = len(probeText)
+		diag(env, "Loaded %d probe strings from %q", len(probeText), flags.ProbeList)
 	}
 
 	// Establish the endpoints of the search. These may be modified by
 	// bracketing (see below).
-	if *goodVal < 0 || *badVal < 0 {
-		log.Fatalf("The values of GOOD (%d) and BAD (%d) must be non-negative", *goodVal, *badVal)
-	} else if *goodVal == *badVal {
-		log.Fatalf("The values of GOOD and BAD must be distinct (got %d)", *goodVal)
+	if flags.Good < 0 || flags.Bad < 0 {
+		return fmt.Errorf("the values of GOOD (%d) and BAD (%d) must be non-negative", flags.Good, flags.Bad)
+	} else if flags.Good == flags.Bad {
+		return fmt.Errorf("the values of GOOD and BAD must be distinct (got %d)", flags.Good)
 	}
-	diag("Using %d as GOOD, using %d as BAD", *goodVal, *badVal)
+	diag(env, "Using %d as GOOD, using %d as BAD", flags.Good, flags.Bad)
 
 	// Order the endpoints so that lo ≤ hi.  If requested, verify that the
 	// starting endpoints have the expected status.
-	lo, hi, loOK, hiOK := minmax(*goodVal, *badVal)
+	lo, hi, loOK, hiOK := minmax(flags.Good, flags.Bad)
 
 	// If there is a probe list file, and the caller only specified one
 	// endpoint, implicitly enable bracketing.
 	if probeText != nil && lo == 0 {
-		*doBrack = true
+		flags.Bracket = true
 	}
-	if *doVerify {
+	if flags.Verify {
 		if lo > 0 {
-			diag("▷ Verifying that %d is %v...", lo, loOK)
-			if ok := runTrial(lo, flag.Args()); ok != loOK {
-				log.Fatalf("Value %d reports as %v, but is expected to be %v", lo, ok, loOK)
+			diag(env, "▷ Verifying that %d is %v...", lo, loOK)
+			if ok, err := runTrial(env, lo, script); err != nil {
+				return fmt.Errorf("probe value %d failed: %w", lo, err)
+			} else if ok != loOK {
+				return fmt.Errorf("value %d reports as %v, but is expected to be %v", lo, ok, loOK)
 			}
 		}
-		diag("▷ Verifying that %d is %v...", hi, hiOK)
-		if ok := runTrial(hi, flag.Args()); ok != hiOK {
-			log.Fatalf("Value %d reports as %v, but is expected to be %v", hi, ok, hiOK)
+		diag(env, "▷ Verifying that %d is %v...", hi, hiOK)
+		if ok, err := runTrial(env, hi, script); err != nil {
+			return fmt.Errorf("probe value %d failed: %w", hi, err)
+		} else if ok != hiOK {
+			return fmt.Errorf("value %d reports as %v, but is expected to be %v", hi, ok, hiOK)
 		}
 	}
 
@@ -124,25 +133,27 @@ func main() {
 	start := time.Now()
 
 	// Bracketing: If lo == 0, search for a bracketing value above hi.
-	if *doBrack && lo == 0 {
+	if flags.Bracket && lo == 0 {
 		// Use hi as the baseline.
 		lo, loOK = hi, hiOK
 
-		diag("Searching for a bracketing value above %d [%v]...", lo, loOK)
+		diag(env, "Searching for a bracketing value above %d [%v]...", lo, loOK)
 		delta := clog2(lo)
 		base := lo
 		for {
 			next := lo + delta
 			if next <= 0 { // overflow
-				log.Fatalf("No bracketing value found above lo=%d [%s]", lo, loOK)
-			} else if *maxBrack > 0 && next > *maxBrack {
-				log.Fatalf("No bracketing value found between lo=%d [%s] and %d", lo, loOK, *maxBrack)
+				return fmt.Errorf("no bracketing value found above lo=%d [%s]", lo, loOK)
+			} else if flags.MaxBracket > 0 && next > flags.MaxBracket {
+				return fmt.Errorf("no bracketing value found between lo=%d [%s] and %d", lo, loOK, flags.MaxBracket)
 			}
 			np++
 
 			// If the search brackets a change, we're done.
-			diag("Bracketing search: base=%d [%s]; next=%d Δ=%d", base, loOK, next, delta)
-			if runTrial(next, flag.Args()) != loOK {
+			diag(env, "Bracketing search: base=%d [%s]; next=%d Δ=%d", base, loOK, next, delta)
+			if ok, err := runTrial(env, next, script); err != nil {
+				return fmt.Errorf("probe %d failed: %w", next, err)
+			} else if ok != loOK {
 				hi = next
 				hiOK = !loOK
 				lo = base
@@ -151,15 +162,18 @@ func main() {
 			delta *= 2
 			base = next
 		}
-		diag("Found bracketing value: hi=%d [%s], adjusted lo to %d", hi, hiOK, lo)
+		diag(env, "Found bracketing value: hi=%d [%s], adjusted lo to %d", hi, hiOK, lo)
 	}
 
 	// Binary search in the remaining delta.
 	for lo+1 < hi {
 		next := (lo + hi) / 2
 		np++
-		diag("Current state: lo=%d [%s] hi=%d [%s]; next=%d Δ=%d", lo, loOK, hi, hiOK, next, hi-lo)
-		ok := runTrial(next, flag.Args())
+		diag(env, "Current state: lo=%d [%s] hi=%d [%s]; next=%d Δ=%d", lo, loOK, hi, hiOK, next, hi-lo)
+		ok, err := runTrial(env, next, script)
+		if err != nil {
+			return fmt.Errorf("probe %d failed: %w", next, err)
+		}
 		if ok == loOK {
 			lo = next
 			loOK = ok
@@ -175,10 +189,11 @@ func main() {
 	} else {
 		fmt.Println("No culprit found")
 	}
-	diag("%d probes; total time elapsed: %v", np, time.Since(start).Round(time.Millisecond))
+	diag(env, "%d probes; total time elapsed: %v", np, time.Since(start).Round(time.Millisecond))
+	return nil
 }
 
-func diag(msg string, args ...interface{}) { fmt.Fprintf(os.Stderr, msg+"\n", args...) }
+func diag(w io.Writer, msg string, args ...interface{}) { fmt.Fprintf(w, msg+"\n", args...) }
 
 type status bool
 
@@ -202,53 +217,55 @@ func (s status) Mark() rune {
 	return '✗'
 }
 
-func prepCommand(args []string, probe string) *exec.Cmd {
+func prepCommand(env *command.Env, args []string, probe string) *exec.Cmd {
 	script := strings.Join(args, " ")
-	logCommand("SCRIPT", script, nil)
-	cmd := exec.Command(*inShell)
+	logCommand(env, "SCRIPT", script, nil)
+	cmd := exec.Command(flags.UseShell)
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Stdout = cmdOutput
 	cmd.Stderr = cmdOutput
-	if *clMarker != "" {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", *clMarker, probe))
+	if flags.Marker != "" {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", flags.Marker, probe))
 	}
-	if *doChdir != "" {
-		cmd.Dir = os.Expand(*doChdir, func(key string) string {
+	if flags.Chdir != "" {
+		cmd.Dir = os.Expand(flags.Chdir, func(key string) string {
 			if key == "PROBE" {
 				return probe
 			}
 			return ""
 		})
-		logCommand("CHDIR", cmd.Dir, nil)
+		logCommand(env, "CHDIR", cmd.Dir, nil)
 	}
 	return cmd
 }
 
-func logCommand(tag, cmd string, args []string) {
-	if *doLog {
-		fmt.Fprintln(os.Stderr, tag, "::", cmd, strings.Join(args, " "))
+func logCommand(w io.Writer, tag, cmd string, args []string) {
+	if flags.Log {
+		fmt.Fprintln(w, tag, "::", cmd, strings.Join(args, " "))
 	}
 }
 
-func runTrial(cl int, args []string) (out status) {
+func runTrial(env *command.Env, cl int, args []string) (out status, err error) {
 	start := time.Now()
 	defer func() {
-		diag(" %c %d is %v\t[%v elapsed]", out.Mark(), cl, out, time.Since(start).Round(time.Millisecond))
+		if err == nil {
+			diag(env, " %c %d is %v\t[%v elapsed]", out.Mark(), cl, out, time.Since(start).Round(time.Millisecond))
+		}
 	}()
 	probe := strconv.Itoa(cl)
 	if probeText != nil {
 		if cl <= 0 || cl > len(probeText) {
-			log.Fatalf("Invalid probe index %d: no corresponding value", cl)
+			return out, fmt.Errorf("invalid probe index %d: no corresponding value", cl)
 		}
 		probe = probeText[cl-1]
 	}
-	if err := prepCommand(args, probe).Run(); err != nil {
+	if err := prepCommand(env, args, probe).Run(); err != nil {
 		if e, ok := err.(*exec.ExitError); ok {
-			return status(e.Success())
+			return status(e.Success()), nil
 		}
-		log.Fatalf("Subprocess failed: %v", err)
+		return out, fmt.Errorf("subprocess failed: %w", err)
 	}
-	return GOOD
+	return GOOD, nil
 }
 
 func minmax(good, bad int) (lo, hi int, loOK, hiOK status) {
