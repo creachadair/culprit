@@ -15,21 +15,25 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/creachadair/mds/mstr"
 )
 
 var (
-	goodVal  = flag.Int("good", 0, "Value known to be good (0 to bracket)")
-	badVal   = flag.Int("bad", 0, "Value known to be bad (0 to bracket)")
-	doBrack  = flag.Bool("bracket", false, "Enable bracketing")
-	doEcho   = flag.Bool("echo", false, "Echo probe command output to stderr")
-	doLog    = flag.Bool("log", false, "Log probe commands as executed to stderr")
-	doVerify = flag.Bool("verify", true, "Verify the starting points as assigned")
-	doChdir  = flag.String("cd", "", `Change to this directory before each probe (with $PROBE)`)
-	clMarker = flag.String("env", "PROBE", "Variable with probe value in script environment")
-	inShell  = flag.String("shell", "/bin/sh", "Shell to use for running scripts")
-	maxBrack = flag.Int("bmax", 0, "Maximum bracketing value")
+	goodVal   = flag.Int("good", 0, "Value known to be good (0 to bracket)")
+	badVal    = flag.Int("bad", 0, "Value known to be bad (0 to bracket)")
+	doBrack   = flag.Bool("bracket", false, "Enable bracketing")
+	doEcho    = flag.Bool("echo", false, "Echo probe command output to stderr")
+	doLog     = flag.Bool("log", false, "Log probe commands as executed to stderr")
+	doVerify  = flag.Bool("verify", true, "Verify the starting points as assigned")
+	doChdir   = flag.String("cd", "", `Change to this directory before each probe (with $PROBE)`)
+	clMarker  = flag.String("env", "PROBE", "Variable with probe value in script environment")
+	inShell   = flag.String("shell", "/bin/sh", "Shell to use for running scripts")
+	maxBrack  = flag.Int("bmax", 0, "Maximum bracketing value")
+	probeList = flag.String("probelist", "", "File containing probe values, one per line")
 
 	cmdOutput = io.Discard
+	probeText []string
 )
 
 func init() {
@@ -43,16 +47,20 @@ specified script for each probe value.  If the script succeeds, the probe is
 considered GOOD; otherwise BAD.  Search continues until adjacent values are
 found that bracket the GOOD/BAD divide.
 
-At least one of -good and -bad must be positive. By default, %[1]s probes
+At least one of --good and --bad must be positive. By default, %[1]s probes
 between the two values.
 
-However, if -bracket is true and one of the values is 0, the tool will probe
+However, if --bracket is true and one of the values is 0, the tool will probe
 for a bracketing value above the other (positive) value.
 
-If -env is set, an environment variable with that name is populated with the
+If --env is set, an environment variable with that name is populated with the
 current probe value when executing the probe script.
 
-If -cd is set, the probe script is run with its current working directory set
+If --probelist is set, its contents are used as the probe values rather than
+the current index. Each line is one probe value. If only one endpoint is set,
+this implicitly sets --bracket also.
+
+If --cd is set, the probe script is run with its current working directory set
 to the specified value. The variable $PROBE is replaced with the current probe
 value in the directory path.
 
@@ -70,6 +78,15 @@ func main() {
 	if *doEcho {
 		cmdOutput = os.Stderr
 	}
+	if *probeList != "" {
+		data, err := os.ReadFile(*probeList)
+		if err != nil {
+			log.Fatalf("Reading probe list: %v", err)
+		}
+		probeText = mstr.Lines(string(data))
+		*maxBrack = len(probeText)
+		diag("Loaded %d probe strings from %q", len(probeText), *probeList)
+	}
 
 	// Establish the endpoints of the search. These may be modified by
 	// bracketing (see below).
@@ -83,6 +100,12 @@ func main() {
 	// Order the endpoints so that lo ≤ hi.  If requested, verify that the
 	// starting endpoints have the expected status.
 	lo, hi, loOK, hiOK := minmax(*goodVal, *badVal)
+
+	// If there is a probe list file, and the caller only specified one
+	// endpoint, implicitly enable bracketing.
+	if probeText != nil && lo == 0 {
+		*doBrack = true
+	}
 	if *doVerify {
 		if lo > 0 {
 			diag("▷ Verifying that %d is %v...", lo, loOK)
@@ -179,7 +202,7 @@ func (s status) Mark() rune {
 	return '✗'
 }
 
-func prepCommand(args []string, cl int) *exec.Cmd {
+func prepCommand(args []string, probe string) *exec.Cmd {
 	script := strings.Join(args, " ")
 	logCommand("SCRIPT", script, nil)
 	cmd := exec.Command(*inShell)
@@ -187,12 +210,12 @@ func prepCommand(args []string, cl int) *exec.Cmd {
 	cmd.Stdout = cmdOutput
 	cmd.Stderr = cmdOutput
 	if *clMarker != "" {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", *clMarker, cl))
+		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", *clMarker, probe))
 	}
 	if *doChdir != "" {
 		cmd.Dir = os.Expand(*doChdir, func(key string) string {
 			if key == "PROBE" {
-				return strconv.Itoa(cl)
+				return probe
 			}
 			return ""
 		})
@@ -212,8 +235,14 @@ func runTrial(cl int, args []string) (out status) {
 	defer func() {
 		diag(" %c %d is %v\t[%v elapsed]", out.Mark(), cl, out, time.Since(start).Round(time.Millisecond))
 	}()
-
-	if err := prepCommand(args, cl).Run(); err != nil {
+	probe := strconv.Itoa(cl)
+	if probeText != nil {
+		if cl <= 0 || cl > len(probeText) {
+			log.Fatalf("Invalid probe index %d: no corresponding value", cl)
+		}
+		probe = probeText[cl-1]
+	}
+	if err := prepCommand(args, probe).Run(); err != nil {
 		if e, ok := err.(*exec.ExitError); ok {
 			return status(e.Success())
 		}
