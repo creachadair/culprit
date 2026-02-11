@@ -186,7 +186,7 @@ func runMain(env *command.Env, script []string) error {
 	return nil
 }
 
-func diag(w io.Writer, msg string, args ...interface{}) { fmt.Fprintf(w, msg+"\n", args...) }
+func diag(w io.Writer, msg string, args ...any) { fmt.Fprintf(w, msg+"\n", args...) }
 
 type status bool
 
